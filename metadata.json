@@ -1,0 +1,6 @@
+{
+  "name": "Ameta HelpDesk TI — Plataforma SaaS de Chamados",
+  "description": "Plataforma corporativa SaaS em tema azul para gestão de chamados de TI da Ameta Serviços, com controle de acesso por domínio, triagem em tempo real e persistência estruturada.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
