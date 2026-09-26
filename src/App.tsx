@@ -19,6 +19,7 @@ import {
   ErrorPhotoPreview,
   UserResolutionSection,
 } from './components/TicketReplyAndResolution';
+import { useAuth } from './context/AuthContext';
 import {
   Chamado,
   DOMINIO_PERMITIDO,
@@ -125,6 +126,7 @@ type UsuarioTab = 'meus_chamados' | 'abrir' | 'consultar';
 type AuthScreenMode = 'login' | 'cadastro';
 
 export default function App() {
+  const { token, setToken, signInWithGooglePopup, logoutFirebase } = useAuth();
   const [todosUsuarios, setTodosUsuarios] =
     useState<Usuario[]>(INITIAL_USUARIOS);
   const [todosChamados, setTodosChamados] =
@@ -260,22 +262,27 @@ export default function App() {
     setEditStatus(c.Status);
   };
 
-  const executarLogin = async (emailInput: string, senhaInput: string) => {
-    setAuthFeedback(null);
-    const cleanEmail = emailInput.trim().toLowerCase();
-    const cleanSenha = senhaInput;
+  const authHeaders = (overrideToken?: string): Record<string, string> => {
+    const activeToken = overrideToken || token;
+    return {
+      'Content-Type': 'application/json',
+      ...(activeToken ? { Authorization: `Bearer ${activeToken}` } : {}),
+    };
+  };
 
+  const handleGoogleLogin = async () => {
+    setAuthFeedback(null);
     try {
-      const res = await fetch('/api/login', {
+      const { idToken } = await signInWithGooglePopup();
+      const res = await fetch('/api/auth/google', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: cleanEmail, senha: cleanSenha }),
+        headers: authHeaders(idToken),
       });
       const data = await res.json();
       if (!res.ok) {
         setAuthFeedback({
           type: 'error',
-          text: data.error || 'Usuário ou senha incorretos.',
+          text: data.error || 'Não foi possível autenticar com o Google.',
         });
         return;
       }
@@ -301,6 +308,64 @@ export default function App() {
       } else {
         setUsuarioTab('meus_chamados');
         const meus = Array.isArray(data.chamados) ? data.chamados : [];
+        setTodosChamados(meus);
+        setSelectedNumero(meus[0]?.Numero ?? null);
+        setNumeroConsultaInput(meus[0] ? String(meus[0].Numero) : '');
+      }
+    } catch {
+      setAuthFeedback({
+        type: 'error',
+        text: 'Autenticação Google cancelada ou indisponível.',
+      });
+    }
+  };
+
+  const executarLogin = async (emailInput: string, senhaInput: string) => {
+    setAuthFeedback(null);
+    const cleanEmail = emailInput.trim().toLowerCase();
+    const cleanSenha = senhaInput;
+
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: cleanEmail, senha: cleanSenha }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setAuthFeedback({
+          type: 'error',
+          text: data.error || 'Usuário ou senha incorretos.',
+        });
+        return;
+      }
+
+      if (data.token) {
+        setToken(data.token);
+      }
+
+      const loggedUser: Usuario = data.usuario;
+      setUsuarioLogado(loggedUser);
+      setNovoEmailContato(loggedUser.email);
+      setStatusFilter('Todos');
+      setAutorFilter('Todos');
+      setSearchQuery('');
+      setFeedback(null);
+
+      if (loggedUser.tipo === 'admin') {
+        setAdminTab('visao_geral');
+        if (Array.isArray(data.chamados) && data.chamados.length > 0) {
+          setTodosChamados(data.chamados);
+          setSelectedNumero(data.chamados[0].Numero);
+          populateEditForm(data.chamados[0]);
+        }
+        if (Array.isArray(data.usuarios) && data.usuarios.length > 0) {
+          setTodosUsuarios(data.usuarios);
+        }
+      } else {
+        setUsuarioTab('meus_chamados');
+        const meus = Array.isArray(data.chamados) ? data.chamados : [];
+        setTodosChamados(meus);
         setSelectedNumero(meus[0]?.Numero ?? null);
         setNumeroConsultaInput(meus[0] ? String(meus[0].Numero) : '');
       }
@@ -345,6 +410,7 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    void logoutFirebase();
     setUsuarioLogado(null);
     setLoginEmail('');
     setLoginSenha('');
@@ -376,9 +442,10 @@ export default function App() {
       usuarioLogado?.tipo === 'admin' ? cadTipo : 'usuario';
 
     try {
-      const res = await fetch('/api/usuarios', {
+      const endpoint = usuarioLogado ? '/api/usuarios' : '/api/register';
+      const res = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(),
         body: JSON.stringify({
           email: cleanEmail,
           senha: cleanSenha,
@@ -392,7 +459,9 @@ export default function App() {
         else setAuthFeedback({ type: 'error', text: msg });
         return;
       }
-      setTodosUsuarios(data.usuarios);
+      if (Array.isArray(data.usuarios)) {
+        setTodosUsuarios(data.usuarios);
+      }
       setCadEmail('');
       setCadSenha('');
       const successMsg = `Usuário ${cleanEmail} cadastrado com sucesso!`;
@@ -444,7 +513,7 @@ export default function App() {
     try {
       const res = await fetch('/api/usuarios/tipo', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(),
         body: JSON.stringify({ email: emailAlvo, tipo: novoTipo }),
       });
       const data = await res.json();
@@ -487,7 +556,7 @@ export default function App() {
     try {
       const res = await fetch('/api/chamados', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(),
         body: JSON.stringify({
           abertoPor: usuarioLogado.email,
           Assunto: novoAssunto.trim(),
@@ -509,10 +578,14 @@ export default function App() {
       }
 
       const criado: Chamado = data.chamado;
-      setTodosChamados((prev) => {
-        const exists = prev.some((c) => c.Numero === criado.Numero);
-        return exists ? prev : [...prev, criado];
-      });
+      if (Array.isArray(data.chamados)) {
+        setTodosChamados(data.chamados);
+      } else {
+        setTodosChamados((prev) => {
+          const exists = prev.some((c) => c.Numero === criado.Numero);
+          return exists ? prev : [...prev, criado];
+        });
+      }
       setSelectedNumero(criado.Numero);
       setNumeroConsultaInput(String(criado.Numero));
       setNovoAssunto('');
@@ -580,7 +653,7 @@ export default function App() {
     try {
       const res = await fetch(`/api/chamados/${editNumero}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(),
         body: JSON.stringify({
           Assunto: editAssunto,
           Descricao: editDescricao,
@@ -600,7 +673,7 @@ export default function App() {
 
       const statusRes = await fetch(`/api/chamados/${editNumero}/status`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(),
         body: JSON.stringify({ Status: editStatus }),
       });
       const statusData = await statusRes.json();
@@ -653,7 +726,7 @@ export default function App() {
     try {
       const res = await fetch(`/api/chamados/${numero}/status`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(),
         body: JSON.stringify({ Status: novoStatus }),
       });
       const data = await res.json();
@@ -681,6 +754,7 @@ export default function App() {
     try {
       const res = await fetch(`/api/chamados/${numero}/fechar`, {
         method: 'POST',
+        headers: authHeaders(),
       });
       const data = await res.json();
       if (res.ok && Array.isArray(data.chamados)) {
@@ -720,7 +794,7 @@ export default function App() {
     try {
       const res = await fetch(`/api/chamados/${numero}/responder`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(),
         body: JSON.stringify({
           RespostaAdmin: resposta,
           RespondidoPor: usuarioLogado.email,
@@ -763,7 +837,7 @@ export default function App() {
     try {
       const res = await fetch(`/api/chamados/${numero}/resolver`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(),
         body: JSON.stringify({ resolvido }),
       });
       const data = await res.json();
@@ -839,7 +913,7 @@ export default function App() {
   const renderFooter = () => (
     <footer className="py-5 px-6 border-t border-slate-200 bg-white text-center text-xs text-slate-500">
       <div className="max-w-[1360px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
-        <span>Sistema Helpe-Desk Ameta · Ameta Serviços Telecomunicações</span>
+        <span>Sistema Help-desk Ameta · Ameta Serviços Telecomunicações</span>
         <span className="font-mono font-semibold text-[#191E5A]">
           rafael araujo back-end
         </span>
@@ -859,7 +933,7 @@ export default function App() {
             <div className="flex flex-col items-center text-center">
               <AmetaLogo variant="stacked" />
               <h1 className="mt-5 font-display text-xl font-bold text-[#191E5A]">
-                Sistema Helpe-Desk Ameta
+                Sistema Help-desk Ameta
               </h1>
             </div>
 
@@ -919,6 +993,14 @@ export default function App() {
                 >
                   <Lock className="w-4 h-4" />
                   <span>Entrar</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleGoogleLogin}
+                  className="w-full py-2.5 px-4 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <span>Entrar com Conta Google</span>
                 </button>
 
                 <div className="pt-3 border-t border-slate-100 text-center">
@@ -1074,7 +1156,7 @@ export default function App() {
                 Usuário: {usuarioLogado.email}
               </div>
               <h1 className="font-display text-2xl sm:text-3xl font-bold text-white">
-                Sistema Helpe-Desk Ameta
+                Sistema Help-desk Ameta
               </h1>
             </div>
 
@@ -1701,7 +1783,7 @@ export default function App() {
               Administrador: {usuarioLogado.email} · Visão Geral
             </div>
             <h1 className="font-display text-2xl sm:text-3xl font-bold text-white">
-              Sistema Helpe-Desk Ameta
+              Sistema Help-desk Ameta
             </h1>
           </div>
 
