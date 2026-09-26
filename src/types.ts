@@ -17,6 +17,12 @@ export interface Chamado {
   Celular: string;
   'E-mail': string;
   Status: StatusChamado;
+  FotoErro?: string;
+  NomeFotoErro?: string;
+  RespostaAdmin?: string;
+  RespondidoPor?: string;
+  DataResposta?: string;
+  ResolvidoPeloUsuario?: boolean | null;
 }
 
 export const DOMINIO_PERMITIDO = '@ametaservicos.com.br';

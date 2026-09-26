@@ -22,6 +22,12 @@ interface ChamadoRecord {
   Celular: string;
   'E-mail': string;
   Status: 'Aberto' | 'Em andamento' | 'Fechado';
+  FotoErro?: string;
+  NomeFotoErro?: string;
+  RespostaAdmin?: string;
+  RespondidoPor?: string;
+  DataResposta?: string;
+  ResolvidoPeloUsuario?: boolean | null;
 }
 
 const SEED_USUARIOS: UsuarioRecord[] = [
@@ -63,6 +69,11 @@ const SEED_CHAMADOS: ChamadoRecord[] = [
     Celular: '(11) 98412-3390',
     'E-mail': 'lucas.mendes@ametaservicos.com.br',
     Status: 'Em andamento',
+    RespostaAdmin:
+      'Sincronizamos o relógio NTP do provedor de identidade SAML e renovamos a sessão do seu usuário no diretório. Por favor, teste novamente o acesso ao ERP e confirme no botão abaixo se resolveu.',
+    RespondidoPor: 'rafael.araujo@ametaservicos.com.br',
+    DataResposta: '26/09/2026 08:40',
+    ResolvidoPeloUsuario: null,
   },
   {
     Numero: 2,
@@ -96,6 +107,11 @@ const SEED_CHAMADOS: ChamadoRecord[] = [
     Celular: '(11) 98412-3390',
     'E-mail': 'lucas.mendes@ametaservicos.com.br',
     Status: 'Fechado',
+    RespostaAdmin:
+      'Certificado TLS renovado e aplicado no balanceador de carga. Emissão de notas operando normalmente.',
+    RespondidoPor: 'rafael.araujo@ametaservicos.com.br',
+    DataResposta: '25/09/2026 17:15',
+    ResolvidoPeloUsuario: true,
   },
   {
     Numero: 5,
@@ -107,6 +123,11 @@ const SEED_CHAMADOS: ChamadoRecord[] = [
     Celular: '(11) 97104-8821',
     'E-mail': 'mariana.silva@ametaservicos.com.br',
     Status: 'Em andamento',
+    RespostaAdmin:
+      'Permissão atribuída no grupo AD Jurídico-Operações. Faça logoff e login novamente na estação para atualizar o mapeamento de rede.',
+    RespondidoPor: 'rafael.araujo@ametaservicos.com.br',
+    DataResposta: '26/09/2026 09:10',
+    ResolvidoPeloUsuario: null,
   },
 ];
 
@@ -172,7 +193,7 @@ async function startServer() {
   carregarChamados();
 
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: '15mb' }));
 
   // GET /api/state -> retorna chamados filtrados pelo perfil do usuário logado
   app.get('/api/state', (req, res) => {
@@ -183,9 +204,7 @@ async function startServer() {
       tipo === 'admin'
         ? listaChamados
         : email
-        ? listaChamados.filter(
-            (c) => c['Aberto por'].toLowerCase() === email
-          )
+        ? listaChamados.filter((c) => c['Aberto por'].toLowerCase() === email)
         : [];
 
     res.json({
@@ -313,7 +332,7 @@ async function startServer() {
     });
   });
 
-  // POST /api/chamados -> abrir_chamado(email_usuario)
+  // POST /api/chamados -> abrir_chamado(email_usuario) com suporte a FotoErro
   app.post('/api/chamados', (req, res) => {
     const {
       abertoPor,
@@ -322,6 +341,8 @@ async function startServer() {
       Plataforma,
       Celular,
       EmailContato,
+      FotoErro,
+      NomeFotoErro,
     } = req.body ?? {};
 
     const cleanAbertoPor = String(abertoPor ?? '').trim();
@@ -359,6 +380,9 @@ async function startServer() {
       Celular: cleanCelular,
       'E-mail': cleanEmail,
       Status: 'Aberto',
+      ...(FotoErro ? { FotoErro: String(FotoErro) } : {}),
+      ...(NomeFotoErro ? { NomeFotoErro: String(NomeFotoErro) } : {}),
+      ResolvidoPeloUsuario: null,
     };
 
     listaChamados.push(novoChamado);
@@ -381,6 +405,83 @@ async function startServer() {
     });
   });
 
+  // POST /api/chamados/:numero/responder -> Admin responde ao solicitante
+  app.post('/api/chamados/:numero/responder', (req, res) => {
+    const numero = Number(req.params.numero);
+    const chamado = listaChamados.find((c) => c.Numero === numero);
+    if (!chamado) {
+      res.status(404).json({ error: 'Chamado não encontrado!' });
+      return;
+    }
+
+    const { RespostaAdmin, RespondidoPor, Status } = req.body ?? {};
+    const cleanResposta = String(RespostaAdmin ?? '').trim();
+    if (!cleanResposta) {
+      res.status(400).json({
+        error: 'Digite a resposta técnica para o solicitante.',
+      });
+      return;
+    }
+
+    const agora = new Date();
+    const dataFormatada = agora.toLocaleString('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    chamado.RespostaAdmin = cleanResposta;
+    chamado.RespondidoPor = String(
+      RespondidoPor ?? 'rafael.araujo@ametaservicos.com.br'
+    ).trim();
+    chamado.DataResposta = dataFormatada;
+
+    if (
+      Status === 'Aberto' ||
+      Status === 'Em andamento' ||
+      Status === 'Fechado'
+    ) {
+      chamado.Status = Status;
+    } else if (chamado.Status === 'Aberto') {
+      chamado.Status = 'Em andamento';
+    }
+
+    salvarChamados();
+
+    res.json({
+      message: `Resposta enviada ao solicitante ${chamado['Aberto por']}!`,
+      chamado,
+      chamados: listaChamados,
+    });
+  });
+
+  // POST /api/chamados/:numero/resolver -> Usuário informa se resolveu o problema
+  app.post('/api/chamados/:numero/resolver', (req, res) => {
+    const numero = Number(req.params.numero);
+    const chamado = listaChamados.find((c) => c.Numero === numero);
+    if (!chamado) {
+      res.status(404).json({ error: 'Chamado não encontrado!' });
+      return;
+    }
+
+    const { resolvido } = req.body ?? {};
+    const foiResolvido = Boolean(resolvido);
+
+    chamado.ResolvidoPeloUsuario = foiResolvido;
+    chamado.Status = foiResolvido ? 'Fechado' : 'Em andamento';
+    salvarChamados();
+
+    res.json({
+      message: foiResolvido
+        ? `Problema marcado como resolvido! Chamado #${numero} fechado.`
+        : `Sinalizado que o problema persiste. O chamado #${numero} segue em andamento.`,
+      chamado,
+      chamados: listaChamados,
+    });
+  });
+
   // GET /api/chamados/:numero -> consultar_chamado()
   app.get('/api/chamados/:numero', (req, res) => {
     const numero = Number(req.params.numero);
@@ -393,10 +494,7 @@ async function startServer() {
       return;
     }
 
-    if (
-      tipo !== 'admin' &&
-      chamado['Aberto por'].toLowerCase() !== email
-    ) {
+    if (tipo !== 'admin' && chamado['Aberto por'].toLowerCase() !== email) {
       res.status(403).json({
         error:
           'Acesso restrito: você só pode consultar chamados abertos pelo seu próprio e-mail.',
@@ -416,10 +514,12 @@ async function startServer() {
       return;
     }
 
-    const campos: Array<keyof Pick<
-      ChamadoRecord,
-      'Assunto' | 'Descricao' | 'Plataforma' | 'Celular' | 'E-mail'
-    >> = ['Assunto', 'Descricao', 'Plataforma', 'Celular', 'E-mail'];
+    const campos: Array<
+      keyof Pick<
+        ChamadoRecord,
+        'Assunto' | 'Descricao' | 'Plataforma' | 'Celular' | 'E-mail'
+      >
+    > = ['Assunto', 'Descricao', 'Plataforma', 'Celular', 'E-mail'];
 
     for (const campo of campos) {
       const novoValor = req.body?.[campo];

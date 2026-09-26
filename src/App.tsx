@@ -13,6 +13,12 @@ import {
   X,
 } from 'lucide-react';
 import { AmetaLogo } from './components/AmetaLogo';
+import { TicketPhotoField } from './components/TicketPhotoField';
+import {
+  AdminResponderTab,
+  ErrorPhotoPreview,
+  UserResolutionSection,
+} from './components/TicketReplyAndResolution';
 import {
   Chamado,
   DOMINIO_PERMITIDO,
@@ -108,7 +114,13 @@ const INITIAL_CHAMADOS: Chamado[] = [
   },
 ];
 
-type AdminTab = 'visao_geral' | 'consultar' | 'alterar' | 'usuarios' | 'abrir';
+type AdminTab =
+  | 'visao_geral'
+  | 'responder'
+  | 'consultar'
+  | 'alterar'
+  | 'usuarios'
+  | 'abrir';
 type UsuarioTab = 'meus_chamados' | 'abrir' | 'consultar';
 type AuthScreenMode = 'login' | 'cadastro';
 
@@ -153,6 +165,8 @@ export default function App() {
   const [novaPlataforma, setNovaPlataforma] = useState('');
   const [novoCelular, setNovoCelular] = useState('');
   const [novoEmailContato, setNovoEmailContato] = useState('');
+  const [novaFotoErro, setNovaFotoErro] = useState('');
+  const [novoNomeFotoErro, setNovoNomeFotoErro] = useState('');
 
   const [editNumero, setEditNumero] = useState<number>(1);
   const [editAssunto, setEditAssunto] = useState('');
@@ -481,6 +495,8 @@ export default function App() {
           Plataforma: novaPlataforma.trim(),
           Celular: novoCelular.trim(),
           EmailContato: novoEmailContato.trim(),
+          FotoErro: novaFotoErro || undefined,
+          NomeFotoErro: novoNomeFotoErro || undefined,
         }),
       });
       const data = await res.json();
@@ -503,6 +519,8 @@ export default function App() {
       setNovaDescricao('');
       setNovaPlataforma('');
       setNovoCelular('');
+      setNovaFotoErro('');
+      setNovoNomeFotoErro('');
       setFeedback({
         type: 'success',
         text: `Chamado criado! Número do chamado: #${String(
@@ -529,6 +547,8 @@ export default function App() {
         Celular: novoCelular.trim(),
         'E-mail': novoEmailContato.trim(),
         Status: 'Aberto',
+        ...(novaFotoErro ? { FotoErro: novaFotoErro } : {}),
+        ...(novoNomeFotoErro ? { NomeFotoErro: novoNomeFotoErro } : {}),
       };
       setTodosChamados((prev) => [...prev, criado]);
       setSelectedNumero(criado.Numero);
@@ -537,6 +557,8 @@ export default function App() {
       setNovaDescricao('');
       setNovaPlataforma('');
       setNovoCelular('');
+      setNovaFotoErro('');
+      setNovoNomeFotoErro('');
       setFeedback({
         type: 'success',
         text: `Chamado criado! Número do chamado: #${String(
@@ -678,6 +700,100 @@ export default function App() {
         3,
         '0'
       )} fechado com sucesso!`,
+    });
+  };
+
+  const handleEnviarRespostaAdmin = async (
+    numero: number,
+    resposta: string,
+    novoStatus: StatusChamado
+  ) => {
+    if (usuarioLogado?.tipo !== 'admin') return;
+    const dataFormatada = new Date().toLocaleString('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    try {
+      const res = await fetch(`/api/chamados/${numero}/responder`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          RespostaAdmin: resposta,
+          RespondidoPor: usuarioLogado.email,
+          Status: novoStatus,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && Array.isArray(data.chamados)) {
+        setTodosChamados(data.chamados);
+      }
+    } catch {
+      setTodosChamados((prev) =>
+        prev.map((c) =>
+          c.Numero === numero
+            ? {
+                ...c,
+                RespostaAdmin: resposta,
+                RespondidoPor: usuarioLogado.email,
+                DataResposta: dataFormatada,
+                Status: novoStatus,
+              }
+            : c
+        )
+      );
+    }
+
+    setFeedback({
+      type: 'success',
+      text: `Resposta enviada ao solicitante do chamado #${String(
+        numero
+      ).padStart(3, '0')}!`,
+    });
+    setAdminTab('visao_geral');
+  };
+
+  const handleResolverPeloUsuario = async (
+    numero: number,
+    resolvido: boolean
+  ) => {
+    try {
+      const res = await fetch(`/api/chamados/${numero}/resolver`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resolvido }),
+      });
+      const data = await res.json();
+      if (res.ok && Array.isArray(data.chamados)) {
+        setTodosChamados(data.chamados);
+      }
+    } catch {
+      setTodosChamados((prev) =>
+        prev.map((c) =>
+          c.Numero === numero
+            ? {
+                ...c,
+                ResolvidoPeloUsuario: resolvido,
+                Status: resolvido ? 'Fechado' : 'Em andamento',
+              }
+            : c
+        )
+      );
+    }
+
+    setFeedback({
+      type: 'success',
+      text: resolvido
+        ? `Confirmado! Chamado #${String(numero).padStart(
+            3,
+            '0'
+          )} marcado como resolvido e fechado.`
+        : `Sinalizado que o problema persiste no chamado #${String(
+            numero
+          ).padStart(3, '0')}.`,
     });
   };
 
@@ -1204,6 +1320,16 @@ export default function App() {
                           </span>
                         </div>
                       </div>
+
+                      <ErrorPhotoPreview
+                        fotoErro={chamadoSelecionado.FotoErro}
+                        nomeFotoErro={chamadoSelecionado.NomeFotoErro}
+                      />
+
+                      <UserResolutionSection
+                        chamado={chamadoSelecionado}
+                        onResolver={handleResolverPeloUsuario}
+                      />
                     </div>
                   </div>
                 ) : (
@@ -1297,6 +1423,19 @@ export default function App() {
                     className="w-full px-3.5 py-2.5 text-sm font-mono bg-slate-50 border border-slate-300 rounded-lg text-slate-950 focus:outline-none focus:border-[#191E5A] focus:bg-white"
                   />
                 </div>
+
+                <TicketPhotoField
+                  fotoErro={novaFotoErro}
+                  nomeFotoErro={novoNomeFotoErro}
+                  onSelectPhoto={(dataUrl, fileName) => {
+                    setNovaFotoErro(dataUrl);
+                    setNovoNomeFotoErro(fileName);
+                  }}
+                  onClearPhoto={() => {
+                    setNovaFotoErro('');
+                    setNovoNomeFotoErro('');
+                  }}
+                />
 
                 <div className="pt-4 border-t border-slate-200 flex items-center justify-end gap-3">
                   <button
@@ -1411,6 +1550,16 @@ export default function App() {
                         </div>
                       ))}
                     </dl>
+
+                    <ErrorPhotoPreview
+                      fotoErro={resultadoConsulta.chamado.FotoErro}
+                      nomeFotoErro={resultadoConsulta.chamado.NomeFotoErro}
+                    />
+
+                    <UserResolutionSection
+                      chamado={resultadoConsulta.chamado}
+                      onResolver={handleResolverPeloUsuario}
+                    />
                   </div>
                 )}
 
@@ -1467,6 +1616,17 @@ export default function App() {
             }`}
           >
             Listar Chamados ({todosChamados.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setAdminTab('responder')}
+            className={`py-1 transition-colors whitespace-nowrap border-b-2 cursor-pointer ${
+              adminTab === 'responder'
+                ? 'border-[#191E5A] text-slate-950 font-semibold'
+                : 'border-transparent hover:text-slate-950'
+            }`}
+          >
+            Responder Solicitante
           </button>
           <button
             type="button"
@@ -1587,6 +1747,17 @@ export default function App() {
               }`}
             >
               1. Listar Chamados
+            </button>
+            <button
+              type="button"
+              onClick={() => setAdminTab('responder')}
+              className={`px-3.5 py-2 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
+                adminTab === 'responder'
+                  ? 'bg-white text-slate-950 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-950'
+              }`}
+            >
+              Responder Solicitante
             </button>
             <button
               type="button"
@@ -1824,9 +1995,52 @@ export default function App() {
                         </span>
                       </div>
                     </div>
+
+                    <ErrorPhotoPreview
+                      fotoErro={chamadoSelecionado.FotoErro}
+                      nomeFotoErro={chamadoSelecionado.NomeFotoErro}
+                    />
+
+                    {chamadoSelecionado.RespostaAdmin && (
+                      <div className="p-3 rounded-lg bg-blue-50/70 border border-blue-200 space-y-1">
+                        <div className="text-[11px] font-mono font-semibold text-[#191E5A]">
+                          Última Resposta Enviada ({chamadoSelecionado.DataResposta})
+                        </div>
+                        <p className="text-xs text-slate-800">
+                          {chamadoSelecionado.RespostaAdmin}
+                        </p>
+                      </div>
+                    )}
+
+                    {chamadoSelecionado.ResolvidoPeloUsuario !== null &&
+                      chamadoSelecionado.ResolvidoPeloUsuario !== undefined && (
+                        <div className="text-xs font-semibold pt-1">
+                          Confirmação do usuário:{' '}
+                          {chamadoSelecionado.ResolvidoPeloUsuario ? (
+                            <span className="text-emerald-700">
+                              Problema Resolvido
+                            </span>
+                          ) : (
+                            <span className="text-amber-700">
+                              Ainda Não Resolveu
+                            </span>
+                          )}
+                        </div>
+                      )}
                   </div>
 
                   <div className="pt-4 border-t border-slate-200 space-y-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedNumero(chamadoSelecionado.Numero);
+                        setAdminTab('responder');
+                      }}
+                      className="w-full py-2.5 px-3 text-xs font-semibold text-white bg-[#191E5A] hover:bg-[#111542] rounded-lg transition-colors cursor-pointer"
+                    >
+                      Responder Solicitante
+                    </button>
+
                     <div className="text-xs font-semibold text-slate-700">
                       4. Alterar Status do Chamado
                     </div>
@@ -1886,6 +2100,17 @@ export default function App() {
               )}
             </div>
           </div>
+        )}
+
+        {adminTab === 'responder' && (
+          <AdminResponderTab
+            chamados={todosChamados}
+            selectedNumero={
+              selectedNumero || (todosChamados[0]?.Numero ?? 1)
+            }
+            onSelectNumero={(num) => setSelectedNumero(num)}
+            onEnviarResposta={handleEnviarRespostaAdmin}
+          />
         )}
 
         {adminTab === 'consultar' && (
@@ -2325,6 +2550,19 @@ export default function App() {
                   className="w-full px-3.5 py-2.5 text-sm font-mono bg-slate-50 border border-slate-300 rounded-lg text-slate-950 focus:outline-none focus:border-[#191E5A] focus:bg-white"
                 />
               </div>
+
+              <TicketPhotoField
+                fotoErro={novaFotoErro}
+                nomeFotoErro={novoNomeFotoErro}
+                onSelectPhoto={(dataUrl, fileName) => {
+                  setNovaFotoErro(dataUrl);
+                  setNovoNomeFotoErro(fileName);
+                }}
+                onClearPhoto={() => {
+                  setNovaFotoErro('');
+                  setNovoNomeFotoErro('');
+                }}
+              />
 
               <div className="pt-4 border-t border-slate-200 flex justify-end">
                 <button
